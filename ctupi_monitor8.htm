@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <title>套利平倉壓力指數 (CTUPI) 即時監控</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f7f6; padding: 20px; color: #333; }
+        .card { background: white; max-width: 600px; margin: 0 auto; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); padding: 25px; }
+        h2 { margin-top: 0; color: #1a2a3a; text-align: center; }
+        .index-box { text-align: center; margin: 20px 0; padding: 20px; background: #f8fafc; border-radius: 8px; border: 2px solid #e2e8f0; }
+        .index-value { font-size: 3rem; font-weight: bold; color: #dc2626; }
+        .status-text { font-size: 1.1rem; font-weight: bold; margin-top: 5px; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 0.95rem; margin-top: 15px; }
+        .grid-item { padding: 10px; background: #f1f5f9; border-radius: 6px; }
+        .btn { display: block; width: 100%; padding: 12px; background: #1e293b; color: white; border: none; border-radius: 6px; font-size: 1rem; cursor: pointer; margin-top: 15px; }
+        .btn:hover { background: #0f172a; }
+        .timestamp { text-align: center; font-size: 0.8rem; color: #64748b; margin-top: 10px; }
+        .countdown { text-align: center; font-size: 0.8rem; color: #94a3b8; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h2>Carry Trade 套利平倉壓力指數</h2>
+    
+    <div class="index-box">
+        <div>當前 CTUPI 加權指數</div>
+        <div id="ctupi-val" class="index-value">載入中...</div>
+        <div id="ctupi-status" class="status-text">--</div>
+    </div>
+
+    <h3>即時交叉盤數據</h3>
+    <div class="grid">
+        <div class="grid-item">AUD/JPY: <strong id="val-audjpy">--</strong></div>
+        <div class="grid-item">EUR/JPY: <strong id="val-eurjpy">--</strong></div>
+        <div class="grid-item">JPY/HKD: <strong id="val-jpyhkd">--</strong> (每百日圓)</div>
+        <div class="grid-item">TWD/JPY: <strong id="val-twdjpy">--</strong></div>
+    </div>
+
+    <button class="btn" onclick="resetTimerAndFetch()">🔄 刷新即時數據</button>
+    <div id="timestamp" class="timestamp"></div>
+    <div id="countdown" class="countdown">將於 60 秒後自動更新...</div>
+</div>
+
+<script>
+// 1. 設定風暴前夕的「基期常數」
+const BASE_RATES = {
+    AUDJPY: 98.50,
+    EURJPY: 165.20,
+    JPYHKD: 4.85,  
+    TWDJPY: 0.215
+};
+
+let refreshInterval;
+let countdownTimer;
+let timeLeft = 60;
+
+async function fetchRatesAndCalculate() {
+    const ctupiValEl = document.getElementById('ctupi-val');
+    const statusEl = document.getElementById('ctupi-status');
+    
+    const apiKey = 'dbaqtr1r01qo2u5gsln0dbaqtr1r01qo2u5gslng';
+    const url = `https://finnhub.io/api/v1/forex/rates?base=USD&token=${apiKey}`;
+
+    try {
+        const response = await fetch(url);
+        
+        if (response.status === 429) {
+            throw new Error("觸發 Finnhub 頻率限制，請稍候再試");
+        }
+        if (!response.ok) throw new Error("網路回應不成功");
+        
+        const data = await response.json();
+        const rates = data.quote || data.rates || data; 
+
+        if (!rates || !rates.JPY) throw new Error("數據結構異常");
+
+        // 主要匯率（修正重複宣告，統一處理 TWD 備份常數）
+        const usd_jpy = rates.JPY;
+        const usd_aud = rates.AUD;
+        const usd_eur = rates.EUR;
+        const usd_hkd = rates.HKD;
+        const usd_twd = rates.TWD || 32.2; // 如果 API 無 TWD 則預設 32.2
+
+        // 2. 交叉盤即時換算
+        const aud_jpy = usd_jpy / usd_aud;
+        const eur_jpy = usd_jpy / usd_eur;
+        const jpy_hkd = (usd_hkd / usd_jpy) * 100; 
+        const twd_jpy = usd_jpy / usd_twd;
+
+        // 3. 套入加權指數公式 (CTUPI)
+        const comp1 = 35 * (BASE_RATES.AUDJPY / aud_jpy);
+        const comp2 = 25 * (BASE_RATES.EURJPY / eur_jpy);
+        const comp3 = 20 * (jpy_hkd / BASE_RATES.JPYHKD);
+        const comp4 = 20 * (BASE_RATES.TWDJPY / twd_jpy);
+        
+        const ctupi = comp1 + comp2 + comp3 + comp4;
+
+        // 4. 更新網頁 UI
+        document.getElementById('val-audjpy').innerText = aud_jpy.toFixed(2);
+        document.getElementById('val-eurjpy').innerText = eur_jpy.toFixed(2);
+        document.getElementById('val-jpyhkd').innerText = jpy_hkd.toFixed(2);
+        document.getElementById('val-twdjpy').innerText = twd_jpy.toFixed(4);
+        
+        ctupiValEl.innerText = ctupi.toFixed(2);
+
+        // 5. 狀態解讀
+        if (ctupi >= 115) {
+            statusEl.innerText = "🚨 極端去槓桿！空頭海嘯瘋狂踩踏中";
+            statusEl.style.color = "#dc2626";
+        } else if (ctupi >= 105) {
+            statusEl.innerText = "⚠️ 風暴發酵中！市場流動性持續收緊";
+            statusEl.style.color = "#ea580c";
+        } else if (ctupi <= 98) {
+            statusEl.innerText = "🟢 安全訊號！平倉潮結束，資金重回股市";
+            statusEl.style.color = "#16a34a";
+        } else {
+            statusEl.innerText = "🔵 橫盤拉扯區，多空陷入僵局";
+            statusEl.style.color = "#2563eb";
+        }
+
+        document.getElementById('timestamp').innerText = "最後更新時間: " + new Date().toLocaleTimeString();
+
+    } catch (error) {
+        console.error("Finnhub 更新失敗:", error);
+        ctupiValEl.innerText = "錯誤";
+        statusEl.innerText = error.message || "數據解析異常，請檢查 API Key 或網路。";
+    }
+}
+
+// 倒數與自動更新邏輯整合
+function startTimer() {
+    clearInterval(refreshInterval);
+    clearInterval(countdownTimer);
+    timeLeft = 60;
+    
+    const countdownEl = document.getElementById('countdown');
+
+    // 每秒倒數
+    countdownTimer = setInterval(() => {
+        timeLeft--;
+        countdownEl.innerText = `將於 ${timeLeft} 秒後自動更新...`;
+        if (timeLeft <= 0) {
+            fetchRatesAndCalculate(); // 時間到立刻抓取
+            timeLeft = 60;            // 重置倒數
+        }
+    }, 1000);
+}
+
+// 手動按鈕點擊時
+function resetTimerAndFetch() {
+    fetchRatesAndCalculate();
+    startTimer();
+}
+
+// 網頁首次載入
+window.onload = () => {
+    fetchRatesAndCalculate();
+    startTimer();
+};
+</script>
+
+</body>
+</html>
