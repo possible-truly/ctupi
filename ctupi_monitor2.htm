@@ -15,6 +15,7 @@
         .btn { display: block; width: 100%; padding: 12px; background: #1e293b; color: white; border: none; border-radius: 6px; font-size: 1rem; cursor: pointer; margin-top: 15px; }
         .btn:hover { background: #0f172a; }
         .timestamp { text-align: center; font-size: 0.8rem; color: #64748b; margin-top: 10px; }
+        .countdown { text-align: center; font-size: 0.8rem; color: #94a3b8; margin-top: 5px; }
     </style>
 </head>
 <body>
@@ -36,12 +37,13 @@
         <div class="grid-item">TWD/JPY: <strong id="val-twdjpy">--</strong></div>
     </div>
 
-    <button class="btn" onclick="fetchRatesAndCalculate()">🔄 刷新即時數據</button>
+    <button class="btn" onclick="resetTimerAndFetch()">🔄 刷新即時數據</button>
     <div id="timestamp" class="timestamp"></div>
+    <div id="countdown" class="countdown">將於 60 秒後自動更新...</div>
 </div>
 
 <script>
-/// 1. 設定風暴前夕的「基期常數」
+// 1. 設定風暴前夕的「基期常數」
 const BASE_RATES = {
     AUDJPY: 98.50,
     EURJPY: 165.20,
@@ -49,49 +51,50 @@ const BASE_RATES = {
     TWDJPY: 0.215
 };
 
+// ⚠️ 填入你在 Finnhub 註冊拿到的免費 API Key
+const FINNHUB_KEY = 'dbaqtr1r01qo2u5gsln0dbaqtr1r01qo2u5gslng'; 
+
+let refreshInterval;
+let countdownTimer;
+let timeLeft = 60;
+
 async function fetchRatesAndCalculate() {
     const ctupiValEl = document.getElementById('ctupi-val');
     const statusEl = document.getElementById('ctupi-status');
-    ctupiValEl.innerText = "計算中...";
-
-    // 定義多個穩定的備用 API 接口網址
-    const apiEndpoints = [
-        'https://er-api.com',            // 備援接口 A (非常穩定)
-        'https://frankfurter.app'       // 備援接口 B (歐洲開源社群維護)
-    ];
-
-    let data = null;
-    let success = false;
-
-    // 輪詢機制：如果接口 A 失敗，自動嘗試接口 B
-    for (let url of apiEndpoints) {
-        try {
-            const response = await fetch(url);
-            if (!response.ok) throw new Error("網路回應不成功");
-            data = await response.json();
-            success = true;
-            break; // 成功抓取就跳出迴圈
-        } catch (e) {
-            console.warn(`嘗試接口 ${url} 失敗，正在切換備援...`, e);
-        }
-    }
-
-    // 如果所有接口都失敗
-    if (!success || !data) {
-        ctupiValEl.innerText = "錯誤";
-        statusEl.innerText = "所有備用網絡數據接口均暫時失效，請稍後重試。";
+    
+    if (FINNHUB_KEY === '你的_FINNHUB_API_KEY') {
+        ctupiValEl.innerText = "請配置 KEY";
+        statusEl.innerText = "請先在程式碼第 70 行填入你的 Finnhub API Key。";
         return;
     }
 
+    // 對接 Finnhub 的外匯匯率端點，基準設為 USD
+    const url = `https://finnhub.io{FINNHUB_KEY}`;
+
     try {
-        // 讀取匯率數據 (相容不同 API 的 JSON 結構)
-        const rates = data.rates || data.rates; 
+        const response = await fetch(url);
         
+        // 處理 Finnhub 免費版頻率限制 (每分鐘最多 60 次請求)
+        if (response.status === 429) {
+            throw new Error("觸發 Finnhub 頻率限制，請稍候再試");
+        }
+        if (!response.ok) throw new Error("網路回應不成功");
+        
+        const data = await response.json();
+        
+        // Finnhub 的結構是 data.data.JPY (注意多了一層 data)
+        const rates = data.data; 
+
+        if (!rates || !rates.JPY) throw new Error("Finnhub 返回數據結構異常");
+
         const usd_jpy = rates.JPY;
         const usd_aud = rates.AUD;
         const usd_eur = rates.EUR;
         const usd_hkd = rates.HKD;
-        const usd_twd = rates.TWD || 32.2; // 若接口無台幣則帶入合理常數防錯
+        
+        // Finnhub 免費外匯接口可能不包含 TWD
+        // 如果無台幣數據，帶入合理常數 (如 32.2) 防錯
+        const usd_twd = rates.TWD || 32.2; 
 
         // 2. 交叉盤即時換算
         const aud_jpy = usd_jpy / usd_aud;
@@ -132,21 +135,42 @@ async function fetchRatesAndCalculate() {
 
         document.getElementById('timestamp').innerText = "最後更新時間: " + new Date().toLocaleTimeString();
 
-    } catch (calcError) {
-        console.error("數據解析或計算錯誤:", calcError);
+    } catch (error) {
+        console.error("Finnhub 更新失敗:", error);
         ctupiValEl.innerText = "錯誤";
-        statusEl.innerText = "數據格式異常，無法完成指標計算。";
+        statusEl.innerText = error.message || "數據解析異常，請檢查 API Key 或網路。";
     }
 }
 
-// 首次加載
-window.onload = fetchRatesAndCalculate;
+// 倒數計時器邏輯
+function startCountdown() {
+    clearInterval(countdownTimer);
+    timeLeft = 60;
+    const countdownEl = document.getElementById('countdown');
+    
+    countdownTimer = setInterval(() => {
+        timeLeft--;
+        countdownEl.innerText = `將於 ${timeLeft} 秒後自動更新...`;
+        if (timeLeft <= 0) {
+            timeLeft = 60; // 重置
+        }
+    }, 1000);
+}
 
+// 手動刷新時重置計時器
+function resetTimerAndFetch() {
+    fetchRatesAndCalculate();
+    startCountdown();
+    clearInterval(refreshInterval);
+    // 設定每 60 秒自動刷新一次（Finnhub 免費版限額為每分鐘 60 次，我們每分鐘點 1 次非常安全）
+    refreshInterval = setInterval(fetchRatesAndCalculate, 60000); 
+}
+
+// 網頁首次載入
+window.onload = () => {
+    resetTimerAndFetch();
+};
 </script>
 
 </body>
 </html>
-
-
-
-
