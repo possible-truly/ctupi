@@ -51,8 +51,6 @@ const BASE_RATES = {
     TWDJPY: 0.215
 };
 
-// ⚠️ 填入你在 Finnhub 註冊拿到的免費 API Key
-const FINNHUB_KEY = 'dbaqtr1r01qo2u5gsln0dbaqtr1r01qo2u5gslng'; 
 
 let refreshInterval;
 let countdownTimer;
@@ -62,14 +60,9 @@ async function fetchRatesAndCalculate() {
     const ctupiValEl = document.getElementById('ctupi-val');
     const statusEl = document.getElementById('ctupi-status');
     
-    if (FINNHUB_KEY === '你的_FINNHUB_API_KEY') {
-        ctupiValEl.innerText = "請配置 KEY";
-        statusEl.innerText = "請先在程式碼第 70 行填入你的 Finnhub API Key。";
-        return;
-    }
-
-    // 對接 Finnhub 的外匯匯率端點，基準設為 USD
-    const url = `https://finnhub.io{FINNHUB_KEY}`;
+   // Finnhub API endpoint (requires API key)
+    const apiKey = 'dbaqtr1r01qo2u5gsln0dbaqtr1r01qo2u5gslng'; // replace with your actual key
+    const url = `https://finnhub.io/api/v1/forex/rates?base=USD&token=${apiKey}`;
 
     try {
         const response = await fetch(url);
@@ -82,15 +75,17 @@ async function fetchRatesAndCalculate() {
         
         const data = await response.json();
         
-        // Finnhub 的結構是 data.data.JPY (注意多了一層 data)
-        const rates = data.data; 
+ 	const rates = data.quote || data.rates || data; 
+        // Finnhub returns { base: "USD", quote: { JPY: ..., AUD: ..., ... } }
 
-        if (!rates || !rates.JPY) throw new Error("Finnhub 返回數據結構異常");
+        if (!rates || !rates.JPY) throw new Error("數據結構異常");
 
+        // 主要匯率
         const usd_jpy = rates.JPY;
         const usd_aud = rates.AUD;
         const usd_eur = rates.EUR;
         const usd_hkd = rates.HKD;
+        const usd_twd = rates.TWD || 32.5; // 若無台幣數據則防錯
         
         // Finnhub 免費外匯接口可能不包含 TWD
         // 如果無台幣數據，帶入合理常數 (如 32.2) 防錯
